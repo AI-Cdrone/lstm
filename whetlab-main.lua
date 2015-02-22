@@ -24,6 +24,7 @@ else
         LookupTable = nn.LookupTable
     end
 end
+
 require('nngraph')
 require('base')
 whetlab = require 'whetlab'
@@ -32,7 +33,7 @@ local ptb = require('data')
 local parameters = {}
 parameters.batch_size = {type='int', min=1, max=1000}
 parameters.seq_length = {type='int', min=1, max=100}
-parameters.layers = {type='int', min=1, max=10}
+parameters.layers = {type='int', min=1, max=4}
 parameters.decay = {type='float', min=1, max=3}
 parameters.rnn_size = {type='int', min=10, max=2000}
 parameters.dropout = {type='float', min=0, max=1}
