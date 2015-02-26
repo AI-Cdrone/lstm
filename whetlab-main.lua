@@ -48,12 +48,6 @@ outcome.name = 'Neg Perplexity'
 -- nil for access token, it will find it in ~/.whetlab
 local scientist = whetlab('Penn LSTM (short)','Working on ', parameters, outcome, True, nil) 
 job = scientist:suggest()
--- pending = scientist:pending()
--- if #scientist:pending() > 0 then
---     job = pending[1]
--- else
---     job = scientist:suggest()
--- end
 
 for k,v in pairs(job) do print(k,v) end
 
