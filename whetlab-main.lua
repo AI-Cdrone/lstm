@@ -31,21 +31,21 @@ whetlab = require 'whetlab'
 local ptb = require('data')
 
 local parameters = {}
-parameters.batch_size = {type='int', min=1, max=3}
-batchChoices = {20,30,40}
-parameters.layers = {type='int', min=1, max=4}
+parameters.batch_size = {type='int', min=1, max=7}
+batchChoices = {10,15,20,25,30,35,40}
 parameters.decay = {type='float', min=1, max=3}
-parameters.rnn_size = {type='int', min=100, max=1500}
+parameters.rnn_size = {type='int', min=100, max=1000}
 parameters.dropout = {type='float', min=0, max=1}
 parameters.init_weight = {type='float', min=1e-3, max=1}
 parameters.lr = {type='float', min=1e-1, max=1}
+parameters.perf_tol = {type='float', min=1e-5,max=2}
 parameters.max_grad_norm = {type='float', min=1, max=20}
-parameters.epoch_start_decay = {type='float', min=1, max=13}
 
 local_params = {
-        max_max_epoch=13,
+        max_max_epoch=15,
         seq_length = 20,
-        vocab_size = 10000
+        vocab_size = 10000,
+        layers=2
     }
         
 
@@ -53,7 +53,7 @@ local outcome = {}
 outcome.name = 'Neg Perplexity'
 -- whetlab(name, description, parameters, outcome, resume, access_token)
 -- nil for access token, it will find it in ~/.whetlab
-local scientist = whetlab('Penn LSTM (short)','Working on ', parameters, outcome, True, nil) 
+local scientist = whetlab('Penn LSTM (short, small)','Working on ', parameters, outcome, True, nil) 
 job = scientist:suggest()
 -- pending = scientist:pending()
 -- if #scientist:pending() > 0 then
@@ -67,7 +67,8 @@ for k,v in pairs(job) do print(k,v) end
 local params = {
         batch_size=batchChoices[job.batch_size],
         seq_length=local_params.seq_length,
-        layers=job.layers,
+        layers=local_params.layers,
+        perf_tol=job.perf_tol,
         decay=job.decay,
         rnn_size=job.rnn_size,
         dropout=job.dropout,
@@ -75,7 +76,6 @@ local params = {
         lr=job.lr,
         vocab_size=local_params.vocab_size,
         max_grad_norm=job.max_grad_norm,
-        max_epoch=job.epoch_start_decay,
         max_max_epoch=local_params.max_max_epoch
     }
 
@@ -253,6 +253,7 @@ local function main()
     local step = 0
     local epoch = 0
     local total_cases = 0
+    local last_train_perf, train_perf
     local beginning_time = torch.tic()
     local start_time = torch.tic()
     print("Starting training.")
@@ -273,22 +274,19 @@ local function main()
             local wps = torch.floor(total_cases / torch.toc(start_time))
             local since_beginning_unrounded = torch.toc(beginning_time) / 60
             local since_beginning = g_d(since_beginning_unrounded)
-
+            local epochs_remaining = params.max_max_epoch - epoch
+            local minutes_per_epoch = since_beginning_unrounded / epoch
+            local minutes_remaining = epochs_remaining * minutes_per_epoch
+            local train_perf = g_f3(torch.exp(perps:mean()))
             print('epoch = ' .. g_f3(epoch) ..
-                        ', train perp. = ' .. g_f3(torch.exp(perps:mean())) ..
+                        ', train perp. = ' .. train_perf ..
                         ', wps = ' .. wps ..
                         ', dw:norm() = ' .. g_f3(model.norm_dw) ..
                         ', lr = ' ..  g_f3(params.lr) ..
-                        ', since beginning = ' .. since_beginning .. ' mins.')
+                        ', since beginning = ' .. since_beginning .. ' mins. ' ..
+                        'mins remaining: '.. minutes_remaining)
 
             if epoch > 0.5 then
-                local epochs_remaining = params.max_max_epoch - epoch
-                local minutes_per_epoch = since_beginning_unrounded / epoch
-                local minutes_remaining = epochs_remaining * minutes_per_epoch
-                print("\nMinutes remaining: " .. minutes_remaining ..
-                            " (" .. epochs_remaining .. "epochs remaining, " .. 
-                            minutes_per_epoch .. " minutes per epoch).")
-
                 if minutes_remaining > 120 then
                     print('We are optimizing a "fast" net. Training taking too long. Aborting!')
                     scientist:update(job,0/0)
@@ -298,10 +296,17 @@ local function main()
 
         end
         if step % epoch_size == 0 then
+            -- Report the validation error
             perf = run_valid()
-            if epoch > params.max_epoch then
-                    params.lr = params.lr / params.decay
+
+            -- Decide whether or not to drop the learning rate (if train perplexity plateaus, drop learning rate)
+            if last_train_perf and train_perf < (last_train_perf + params.perf_tol) then
+                params.lr = params.lr / params.decay
             end
+            last_train_perf = train_perf;
+            -- if epoch > params.max_epoch then
+            --         params.lr = params.lr / params.decay
+            -- end
         end
         if step % 33 == 0 then
             cutorch.synchronize()
