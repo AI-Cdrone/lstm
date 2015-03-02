@@ -31,8 +31,8 @@ whetlab = require 'whetlab'
 local ptb = require('data')
 
 local parameters = {}
-parameters.batch_size = {type='int', min=1, max=7}
-batchChoices = {10,15,20,25,30,35,40}
+parameters.batch_size = {type='int', min=1, max=3}
+batchChoices = {20,30,40}
 parameters.decay = {type='float', min=1, max=3}
 parameters.rnn_size = {type='int', min=100, max=1000}
 parameters.dropout = {type='float', min=0, max=1}
@@ -42,7 +42,7 @@ parameters.perf_tol = {type='float', min=1e-5,max=2}
 parameters.max_grad_norm = {type='float', min=1, max=20}
 
 local_params = {
-        max_max_epoch=15,
+        max_max_epoch=25,
         seq_length = 20,
         vocab_size = 10000,
         layers=2
@@ -53,7 +53,8 @@ local outcome = {}
 outcome.name = 'Neg Perplexity'
 -- whetlab(name, description, parameters, outcome, resume, access_token)
 -- nil for access token, it will find it in ~/.whetlab
-local scientist = whetlab('Penn LSTM (short, small)','Working on ', parameters, outcome, True, nil) 
+local scientist = whetlab('Penn LSTM (short, 4hr lim, maxepoch: 25)','Working on ', parameters, outcome, True, nil) 
+local timelim = 240
 job = scientist:suggest()
 -- pending = scientist:pending()
 -- if #scientist:pending() > 0 then
@@ -62,7 +63,7 @@ job = scientist:suggest()
 --     job = scientist:suggest()
 -- end
 
-for k,v in pairs(job) do print(k,v) end
+-- for k,v in pairs(job) do print(k,v) end
 
 local params = {
         batch_size=batchChoices[job.batch_size],
@@ -78,6 +79,20 @@ local params = {
         max_grad_norm=job.max_grad_norm,
         max_max_epoch=local_params.max_max_epoch
     }
+-- local params = {
+--         batch_size=30,
+--         seq_length=local_params.seq_length,
+--         layers=local_params.layers,
+--         perf_tol=500.0,
+--         decay=3.0,
+--         rnn_size=10,
+--         dropout=0.0,
+--         init_weight=0.1,
+--         lr=0.8,
+--         vocab_size=local_params.vocab_size,
+--         max_grad_norm=15.0,
+--         max_max_epoch=local_params.max_max_epoch,
+--     }
 
 local function transfer_data(x)
     return x:cuda()
@@ -253,7 +268,8 @@ local function main()
     local step = 0
     local epoch = 0
     local total_cases = 0
-    local last_train_perf, train_perf
+    local last_train_perf = 1/0
+    local train_perf = 1/0
     local beginning_time = torch.tic()
     local start_time = torch.tic()
     print("Starting training.")
@@ -277,9 +293,9 @@ local function main()
             local epochs_remaining = params.max_max_epoch - epoch
             local minutes_per_epoch = since_beginning_unrounded / epoch
             local minutes_remaining = epochs_remaining * minutes_per_epoch
-            local train_perf = g_f3(torch.exp(perps:mean()))
+            train_perf = torch.exp(perps:mean())
             print('epoch = ' .. g_f3(epoch) ..
-                        ', train perp. = ' .. train_perf ..
+                        ', train perp. = ' .. g_f3(train_perf) ..
                         ', wps = ' .. wps ..
                         ', dw:norm() = ' .. g_f3(model.norm_dw) ..
                         ', lr = ' ..  g_f3(params.lr) ..
@@ -287,26 +303,34 @@ local function main()
                         'mins remaining: '.. minutes_remaining)
 
             if epoch > 0.5 then
-                if minutes_remaining > 120 then
+                if minutes_remaining > timelim then
                     print('We are optimizing a "fast" net. Training taking too long. Aborting!')
                     scientist:update(job,0/0)
                     os.exit()
                 end
             end
-
+            -- print("\nOKAYLETSTROUBLESHOOT")
+            -- print("=======================================================")
+            -- print(last_train_perf)
+            -- print(train_perf)
+            -- if last_train_perf then
+            --     print(last_train_perf-train_perf)
+            -- end
+            -- print("=======================================================\n")
         end
+
         if step % epoch_size == 0 then
             -- Report the validation error
             perf = run_valid()
 
             -- Decide whether or not to drop the learning rate (if train perplexity plateaus, drop learning rate)
-            if last_train_perf and train_perf < (last_train_perf + params.perf_tol) then
+            -- params.perf_tol
+            print(train_perf)
+            print(last_train_perf)
+            if last_train_perf and train_perf > (last_train_perf - params.perf_tol) then
                 params.lr = params.lr / params.decay
             end
-            last_train_perf = train_perf;
-            -- if epoch > params.max_epoch then
-            --         params.lr = params.lr / params.decay
-            -- end
+            last_train_perf = train_perf
         end
         if step % 33 == 0 then
             cutorch.synchronize()
