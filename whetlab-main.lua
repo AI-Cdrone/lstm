@@ -33,12 +33,13 @@ local ptb = require('data')
 local parameters = {}
 parameters.batch_size = {type='int', min=1, max=3}
 batchChoices = {20,30,40}
-parameters.decay = {type='float', min=1, max=3}
-parameters.rnn_size = {type='int', min=100, max=1000}
+-- parameters.nonlinearity = {type='enum', options={'Sigmoid, Tanh, ReLU'}}
+parameters.decay = {type='float', min=1, max=4}
+parameters.rnn_size = {type='int', min=50, max=600}
 parameters.dropout = {type='float', min=0, max=1}
-parameters.init_weight = {type='float', min=1e-3, max=1}
+parameters.init_weight = {type='float', min=1e-3, max=0.5}
 parameters.lr = {type='float', min=1e-1, max=1}
-parameters.perf_tol = {type='float', min=1e-5,max=2}
+parameters.decay_every = {type='int', min=1, max=24}
 parameters.max_grad_norm = {type='float', min=1, max=20}
 
 local_params = {
@@ -52,24 +53,21 @@ local_params = {
 local outcome = {}
 outcome.name = 'Neg Perplexity'
 -- whetlab(name, description, parameters, outcome, resume, access_token)
--- nil for access token, it will find it in ~/.whetlab
-local scientist = whetlab('Penn LSTM (short, 4hr lim, maxepoch: 25)','Working on ', parameters, outcome, True, nil) 
+local scientist = whetlab('Penn LSTM (short, plateau decay LR, 4hr lim, maxepoch: 25)',
+                            'Working on tuning an LSTM on the Penn Treebank Dataset.',
+                            parameters,
+                            outcome,
+                            nil)  -- access token (if nil, searches in ~/.whetlab)
 local timelim = 240
 job = scientist:suggest()
--- pending = scientist:pending()
--- if #scientist:pending() > 0 then
---     job = pending[1]
--- else
---     job = scientist:suggest()
--- end
 
--- for k,v in pairs(job) do print(k,v) end
 
+-- Load up the job into a params table, used throughout the fitting code
 local params = {
         batch_size=batchChoices[job.batch_size],
         seq_length=local_params.seq_length,
         layers=local_params.layers,
-        perf_tol=job.perf_tol,
+        decay_every=job.decay_every,
         decay=job.decay,
         rnn_size=job.rnn_size,
         dropout=job.dropout,
@@ -79,20 +77,7 @@ local params = {
         max_grad_norm=job.max_grad_norm,
         max_max_epoch=local_params.max_max_epoch
     }
--- local params = {
---         batch_size=30,
---         seq_length=local_params.seq_length,
---         layers=local_params.layers,
---         perf_tol=500.0,
---         decay=3.0,
---         rnn_size=10,
---         dropout=0.0,
---         init_weight=0.1,
---         lr=0.8,
---         vocab_size=local_params.vocab_size,
---         max_grad_norm=15.0,
---         max_max_epoch=local_params.max_max_epoch,
---     }
+
 
 local function transfer_data(x)
     return x:cuda()
@@ -276,6 +261,7 @@ local function main()
     local words_per_step = params.seq_length * params.batch_size
     local epoch_size = torch.floor(state_train.data:size(1) / params.seq_length)
     local perps
+    local int_epoch = 0
     while epoch < params.max_max_epoch do
         local perp = fp(state_train)
         if perps == nil then
@@ -309,28 +295,21 @@ local function main()
                     os.exit()
                 end
             end
-            -- print("\nOKAYLETSTROUBLESHOOT")
-            -- print("=======================================================")
-            -- print(last_train_perf)
-            -- print(train_perf)
-            -- if last_train_perf then
-            --     print(last_train_perf-train_perf)
-            -- end
-            -- print("=======================================================\n")
         end
-
         if step % epoch_size == 0 then
+
+            int_epoch = int_epoch + 1
+
             -- Report the validation error
             perf = run_valid()
 
-            -- Decide whether or not to drop the learning rate (if train perplexity plateaus, drop learning rate)
-            -- params.perf_tol
-            print(train_perf)
-            print(last_train_perf)
-            if last_train_perf and train_perf > (last_train_perf - params.perf_tol) then
+            -- Drop the learning rate every params.decay_every epochs
+            local edge_of_plateau = (int_epoch % params.decay_every == 0) and (int_epoch > 0)
+            if edge_of_plateau then
                 params.lr = params.lr / params.decay
             end
-            last_train_perf = train_perf
+
+            print(int_epoch)
         end
         if step % 33 == 0 then
             cutorch.synchronize()
